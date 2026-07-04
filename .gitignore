@@ -3,3 +3,8 @@ __pycache__/
 *.pyo
 data/
 .env
+
+# Claude Code session files / working notes, not part of the project itself
+CLAUDE.md
+code_review.md
+not_working.md
