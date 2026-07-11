@@ -51,3 +51,12 @@ HYDE_CACHE_PATH = os.getenv("HYDE_CACHE_PATH", "./data/hyde_cache")
 # at ingest time: impractical on CPU-only hardware (multi-day for this
 # corpus), reasonable on a dedicated GPU (roughly hours). Off by default.
 CONTEXTUALIZE_CACHE_PATH = os.getenv("CONTEXTUALIZE_CACHE_PATH", "./data/contextualize_cache")
+
+# Generation cache (cache-augmented generation) — the final LLM answer is
+# cached keyed on (model, retrieved context, question), so a repeated or
+# identical query skips the LM Studio call entirely, the dominant latency
+# cost per query. Always on, same disk-cache pattern as the caches above;
+# full corpus preloading (the "textbook" CAG) isn't viable on a 4k-context
+# local model against a multi-thousand-chunk corpus, so this is the
+# response-level equivalent — see README.md for the full tradeoff discussion.
+GENERATION_CACHE_PATH = os.getenv("GENERATION_CACHE_PATH", "./data/generation_cache")

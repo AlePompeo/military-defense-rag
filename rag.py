@@ -43,6 +43,7 @@ class RAG:
         mmr_lambda: float = 0.7,
         use_hyde: bool = False,
         hyde_cache_dir: Optional[str] = None,
+        generation_cache_dir: Optional[str] = None,
     ) -> None:
         self._store = store
         self._client = OpenAI(base_url=lm_studio_url, api_key="lm-studio")
@@ -53,6 +54,7 @@ class RAG:
         self._mmr_lambda = mmr_lambda
         self._use_hyde = use_hyde
         self._hyde_cache = Cache(hyde_cache_dir) if hyde_cache_dir else None
+        self._generation_cache = Cache(generation_cache_dir) if generation_cache_dir else None
         self._lm_studio_url = lm_studio_url
         self._check_lm_studio()
 
@@ -78,10 +80,29 @@ class RAG:
             question, self._top_k, self._candidates, reranker_on, self._mmr_lambda, dense_override
         )
         context = self._build_context(chunks)
+
+        cache_key = self._generation_cache_key(question, context)
+        if self._generation_cache is not None:
+            cached = self._generation_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         answer = self._generate(question, context)
-        return self._flag_unsupported_citations(answer, len(chunks))
+        result = self._flag_unsupported_citations(answer, len(chunks))
+        if self._generation_cache is not None:
+            self._generation_cache.set(cache_key, result)
+        return result
 
     # ---------------------------------------------------------------- helpers
+
+    def _generation_cache_key(self, question: str, context: str) -> str:
+        """Cache-augmented generation: the final answer is keyed on the
+        literal (model, retrieved context, question) triple, so it never
+        needs manual invalidation — if retrieval returns different context
+        (new documents, different settings), the key changes and the cache
+        simply misses."""
+        raw = f"{self._model}:{context}:{question}"
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _hyde_passage(self, question: str) -> str:
         """HyDE: generate a hypothetical doctrine-style passage that would

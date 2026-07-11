@@ -152,6 +152,7 @@ def cmd_query(store: VectorStore, question: str | None, use_reranker: bool, use_
         config.MMR_LAMBDA,
         use_hyde,
         config.HYDE_CACHE_PATH,
+        config.GENERATION_CACHE_PATH,
     )
 
     if question:

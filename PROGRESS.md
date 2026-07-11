@@ -104,6 +104,32 @@ fastembed's quantized ONNX models over full sentence-transformers/torch):
     unsuitable for typical/common hardware, with a clear warning in `--help`.
 
 
+## CAG feasibility check + generation cache (2026-07-11)
+User asked whether Cache-Augmented Generation (CAG) could be added on top of the existing RAG
+pipeline.
+
+- **Verified full/"textbook" CAG (Chan et al.) is not viable here**: it preloads the entire
+  corpus into the model's context so the KV-cache can be reused across queries, skipping
+  retrieval. This project targets small local models (Phi-3 Mini recommended below, 4k-token
+  context) against 26 sources / multi-thousand chunks — nowhere close to fitting in 4k tokens
+  alongside a question and answer. Retrieval stays necessary at this corpus-to-context ratio.
+- **Implemented instead**: response-level generation caching (`rag.py`) — the final LLM answer
+  is now cached, keyed on `(model, retrieved context, question)`. An identical/repeated query
+  returns instantly from disk, skipping the LM Studio call — the dominant per-query latency cost
+  per the "On search speed" section of README.md. No manual invalidation needed: the cache key
+  bakes in the literal retrieved context, so a changed corpus or different retrieval settings
+  naturally produce a different key and a cache miss.
+- **Files touched**: `config.py` (`GENERATION_CACHE_PATH`), `rag.py` (`_generation_cache`,
+  `_generation_cache_key`, wired into `query()`), `main.py` (passes the new path into `RAG(...)`),
+  `README.md` (config table + new "On cache-augmented generation" section).
+- Always on, no CLI flag — same pattern as the embedding/query/HyDE caches (pure win, no
+  accuracy tradeoff, unlike `--hyde`/`--contextualize` which cost extra LLM calls).
+- Verified the cache hit/miss logic directly (LM Studio wasn't running in this session to test
+  against a real model): a throwaway script instantiated `RAG` with a fake store and a mocked
+  LM Studio client, confirming a repeated question returns the cached answer without a second
+  generation call, while a new question still triggers generation. Not yet verified against a
+  real LM Studio server/model.
+
 ##lm studio installation: 
   LM Studio is distributed as an AppImage on Linux. Download it from the official site:                                                     
                                                                                                                                             
