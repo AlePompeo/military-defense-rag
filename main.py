@@ -17,6 +17,7 @@ from embedder import Embedder, Reranker
 from loader import load_document
 from store import VectorStore
 from rag import RAG
+from vision import VisionCaptioner
 
 
 DOCUMENTS: dict[str, str | tuple[str, dict]] = {
@@ -90,18 +91,27 @@ TITLES: dict[str, str] = {
 
 
 def _compose_text(doc: dict, title: str | None, contextualizer: Contextualizer | None) -> str:
-    """Final indexed/embedded text = title, then optional LLM-generated
-    context (opt-in, `--contextualize`), then the clean child chunk."""
+    """Final indexed/embedded text = title, then the section heading the
+    chunk falls under (opt-in-free — see `loader.py`'s section-aware
+    chunking), then optional LLM-generated context (opt-in, `--contextualize`),
+    then the clean child chunk."""
     parts = []
     if title:
         parts.append(title)
+    if doc.get("section"):
+        parts.append(doc["section"])
     if contextualizer is not None:
         parts.append(contextualizer.contextualize(doc["parent_text"], doc["text"]))
     parts.append(doc["text"])
     return "\n\n".join(parts)
 
 
-def cmd_ingest(store: VectorStore, contextualizer: Contextualizer | None) -> None:
+def cmd_ingest(
+    store: VectorStore,
+    contextualizer: Contextualizer | None,
+    embed_fn=None,
+    vision_captioner: VisionCaptioner | None = None,
+) -> None:
     already = set(store.indexed_sources())
     pending = {k: v for k, v in DOCUMENTS.items() if k not in already}
 
@@ -119,7 +129,11 @@ def cmd_ingest(store: VectorStore, contextualizer: Contextualizer | None) -> Non
         url, opts = (entry, {}) if isinstance(entry, str) else entry
         try:
             docs = load_document(
-                url, name, config.CHUNK_SIZE, config.CHUNK_OVERLAP, config.PARENT_CHUNK_SIZE, **opts
+                url, name, config.CHUNK_SIZE, config.CHUNK_OVERLAP, config.PARENT_CHUNK_SIZE,
+                embed_fn=embed_fn,
+                image_captioner=(vision_captioner.caption if vision_captioner else None),
+                semantic_threshold=config.SEMANTIC_CHUNK_SIMILARITY_THRESHOLD,
+                **opts,
             )
             title = TITLES.get(name)
             # Contextualizing is one LLM call per chunk — slow enough to need
@@ -186,6 +200,25 @@ def main() -> None:
             "dedicated GPU (roughly hours). Off by default."
         ),
     )
+    i_parser.add_argument(
+        "--semantic-chunk", action="store_true",
+        help=(
+            "Split parent blocks into child chunks at embedding-similarity boundaries "
+            "instead of a fixed-size sliding window. Reuses the already-loaded document "
+            "embedder — cheap on CPU, unlike --contextualize/--hyde. Off by default so "
+            "chunk boundaries stay stable/reproducible unless explicitly opted into."
+        ),
+    )
+    i_parser.add_argument(
+        "--describe-images", action="store_true",
+        help=(
+            "Caption extracted images/charts via LM Studio's vision endpoint and index the "
+            "captions alongside the text. Requires a vision-capable model loaded in LM Studio "
+            "(e.g. LLaVA/Qwen2-VL/MiniCPM-V) — typically 3B+ params, heavier than the Phi-3 "
+            "Mini text model this project recommends for 3.8GB-RAM hardware. One LLM call per "
+            "extracted image at ingest time, cached. Off by default."
+        ),
+    )
 
     q_parser = sub.add_parser("query", help="Query the RAG")
     q_parser.add_argument("-q", "--question", help="One-shot question (omit for interactive mode)")
@@ -224,7 +257,13 @@ def main() -> None:
             if args.contextualize
             else None
         )
-        cmd_ingest(store, contextualizer)
+        embed_fn = embedder.embed_documents if args.semantic_chunk else None
+        vision_captioner = (
+            VisionCaptioner(config.LM_STUDIO_URL, config.VISION_MODEL, config.VISION_CACHE_PATH)
+            if args.describe_images
+            else None
+        )
+        cmd_ingest(store, contextualizer, embed_fn, vision_captioner)
     elif args.command == "query":
         use_reranker = config.USE_RERANKER and not args.no_rerank
         use_hyde = config.USE_HYDE or args.hyde

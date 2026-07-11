@@ -130,6 +130,72 @@ pipeline.
   generation call, while a new question still triggers generation. Not yet verified against a
   real LM Studio server/model.
 
+## Workflow-gap audit + table/section/semantic chunking/image understanding/Sources (2026-07-11, same session)
+User asked to verify a specific 9-step RAG workflow against the codebase (ingestion, OCR, table
+extraction, image/chart understanding, smart chunking, embeddings, hybrid retrieval, reranking,
+answer generation with citations/metadata) and implement whatever was missing. Already had:
+ingestion, OCR fallback, embeddings, hybrid dense+BM25 retrieval, reranking. Missing: table
+extraction, section-aware/semantic/table-aware chunking, image/chart understanding, an explicit
+Sources list. Implemented all of it (user explicitly said to build everything, including the
+image-understanding piece despite its hardware caveat):
+
+- **Table extraction** (`loader.py: _extract_tables`, `_rows_to_markdown`) — `pdfplumber` detects
+  ruled tables per page, rendered as markdown (indexed/citable) plus raw rows as JSON
+  (`table_json` chunk metadata via a `[TABLE pN#i]\n{json}\n{markdown}` marker that's split back
+  apart in `load_document`). Additive to the existing `pypdf` text path — doesn't touch it, so
+  existing working ingestion for the 26 real sources isn't at risk. New dependency: `pdfplumber`
+  (pure Python, no ML model, CPU-friendly).
+- **Section-aware chunking** — `loader.py: _looks_like_heading` / `_extract_markers` detect
+  "Chapter N"/"Section N" markers and short ALL-CAPS lines as section headings via a **line-scan
+  pre-pass**, not paragraph-block detection: testing against a synthetic PDF showed pypdf's text
+  extraction commonly collapses ALL blank-line paragraph breaks on a page (confirmed by dumping
+  raw `PdfReader.extract_text()` output — a whole page came back as one blank-line-free run), so a
+  heading glued directly to the next paragraph (no blank line between them) would never be
+  isolated by the old paragraph-splitting approach alone. The pre-pass scans raw lines directly,
+  robust to that. Each chunk under a heading gets prefixed with that section title (on top of the
+  existing document-title prefix) in `main.py: _compose_text`.
+- **Semantic chunking** (opt-in, `ingest --semantic-chunk`) — `loader.py: _semantic_split` embeds
+  sentences via the already-loaded document embedder (cheap on CPU, unlike an LLM call) and cuts a
+  new child chunk wherever consecutive-sentence cosine similarity drops below
+  `SEMANTIC_CHUNK_SIMILARITY_THRESHOLD` (default `0.5`, untuned — needs real corpus testing to
+  dial in). Off by default so chunk boundaries stay stable/reproducible unless opted into.
+- **Table/image-aware chunking** — table and image blocks are treated as atomic parents (never
+  merged with prose, never split at the child level by `_slide`/`_semantic_split`) in
+  `loader.py: _group_into_parents`/`chunk`.
+- **Image/chart understanding** (opt-in, `ingest --describe-images`, new `vision.py`) — extracts
+  images per PDF page (`pdfplumber`, cropped from a rendered page) and captions them via LM
+  Studio's vision (`image_url`) chat completions endpoint, asking specifically for chart type,
+  axis labels, legend entries, and key data points. Cached (`VISION_CACHE_PATH`), indexed as an
+  atomic `[IMAGE pN#i]` chunk. **Flagged before building, per user's explicit override**: this
+  needs a vision-capable model (3B+ params) in LM Studio, heavier than the Phi-3 Mini text model
+  this project recommends for 3.8GB RAM — likely won't actually run on the reference hardware.
+  Built anyway at the user's request; documented as such in README's "On image/chart
+  understanding".
+- **Explicit Sources list** (`rag.py: _build_sources_footer`) — every answer now ends with a
+  `Sources:` block resolving each `[n]` to its source/section/URL, using metadata already tracked
+  per chunk. Not cached (cheap to rebuild every time from already-retrieved `chunks`, so it's
+  always fresh even when the underlying answer came from the generation cache).
+- **Known limitations, documented in README ("On section detection and table placement")**:
+  heading detection can misfire on short ALL-CAPS boilerplate (harmless — just a meaningless
+  section label) and can miss non-matching heading styles; a table's `section` tag reflects
+  whichever heading was active at the *end* of its page (tables are appended after the page's
+  full text, not interleaved at their exact position), so it can be off by one section on pages
+  that both end a table and start a new chapter. Table/image *content* extraction itself is
+  unaffected by either limitation.
+- **Verified**: built a synthetic PDF (reportlab + matplotlib: a heading, a topic-shifting
+  two-paragraph section, a ruled table, a second heading, a chart image with axis labels/legend)
+  and ran it through `load_document()` end-to-end with a fake embedder (hashed bag-of-words, for
+  the semantic-split control flow) and a fake image captioner (no LM Studio/vision model available
+  in this environment) — confirmed: both headings detected as sections despite pypdf collapsing
+  all blank lines, the table extracted as one atomic chunk with correct markdown + matching
+  structured JSON rows, the image extracted+captioned as one atomic chunk and NOT produced when no
+  captioner is passed (opt-in respected), semantic chunking split the topic-shifting section into
+  multiple topic-coherent chunks while non-semantic mode kept the old fixed-window behavior, and
+  the table stayed atomic under semantic chunking too. Also regression-checked plain prose (with
+  and without paragraph breaks, no headings/tables) against `chunk()` — output unchanged from the
+  pre-existing behavior. Not verified against the real 26-source corpus (would need network access
+  to re-run `ingest`) or against a real vision-capable model in LM Studio.
+
 ##lm studio installation: 
   LM Studio is distributed as an AppImage on Linux. Download it from the official site:                                                     
                                                                                                                                             

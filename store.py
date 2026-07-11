@@ -167,6 +167,8 @@ class VectorStore:
                     "url": d["url"],
                     "parent_id": d["parent_id"],
                     "parent_text": d["parent_text"],
+                    **({"section": d["section"]} if d.get("section") else {}),
+                    **({"table_json": d["table_json"]} if d.get("table_json") else {}),
                 }
                 for d in new
             ],
@@ -242,6 +244,7 @@ class VectorStore:
                 "text": meta["parent_text"] or doc,
                 "source": meta["source"],
                 "url": meta["url"],
+                "section": meta.get("section"),
             })
             if len(results) >= top_k:
                 break

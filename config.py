@@ -52,6 +52,24 @@ HYDE_CACHE_PATH = os.getenv("HYDE_CACHE_PATH", "./data/hyde_cache")
 # corpus), reasonable on a dedicated GPU (roughly hours). Off by default.
 CONTEXTUALIZE_CACHE_PATH = os.getenv("CONTEXTUALIZE_CACHE_PATH", "./data/contextualize_cache")
 
+# Semantic chunking (opt-in, `ingest --semantic-chunk`) — splits parent blocks
+# into child chunks at embedding-similarity boundaries instead of a fixed-size
+# sliding window. Reuses the already-loaded document embedder (cheap on CPU,
+# unlike --contextualize/--hyde which cost an LLM call). Off by default so
+# chunk boundaries stay stable/reproducible unless explicitly opted into;
+# threshold is an untuned starting point — see PROGRESS.md.
+SEMANTIC_CHUNK_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_CHUNK_SIMILARITY_THRESHOLD", "0.5"))
+
+# Image/chart captioning (opt-in, `ingest --describe-images`) — one LLM call
+# per extracted image at ingest time via LM Studio's vision (image_url) chat
+# completions endpoint, cached. Requires a vision-capable model loaded in LM
+# Studio (e.g. LLaVA/Qwen2-VL/MiniCPM-V), typically 3B+ params — heavier than
+# the Phi-3 Mini text model this project recommends for 3.8GB-RAM hardware;
+# see README.md's "On cache-augmented generation"-style tradeoff note for the
+# same reasoning applied to vision models. Off by default.
+VISION_MODEL = os.getenv("VISION_MODEL", LM_STUDIO_MODEL)
+VISION_CACHE_PATH = os.getenv("VISION_CACHE_PATH", "./data/vision_cache")
+
 # Generation cache (cache-augmented generation) — the final LLM answer is
 # cached keyed on (model, retrieved context, question), so a repeated or
 # identical query skips the LM Studio call entirely, the dominant latency

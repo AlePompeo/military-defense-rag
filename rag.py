@@ -82,18 +82,32 @@ class RAG:
         context = self._build_context(chunks)
 
         cache_key = self._generation_cache_key(question, context)
-        if self._generation_cache is not None:
-            cached = self._generation_cache.get(cache_key)
-            if cached is not None:
-                return cached
+        cached = self._generation_cache.get(cache_key) if self._generation_cache is not None else None
+        if cached is not None:
+            answer = cached
+        else:
+            answer = self._flag_unsupported_citations(self._generate(question, context), len(chunks))
+            if self._generation_cache is not None:
+                self._generation_cache.set(cache_key, answer)
 
-        answer = self._generate(question, context)
-        result = self._flag_unsupported_citations(answer, len(chunks))
-        if self._generation_cache is not None:
-            self._generation_cache.set(cache_key, result)
-        return result
+        if chunks:
+            answer = f"{answer}\n\n{self._build_sources_footer(chunks)}"
+        return answer
 
     # ---------------------------------------------------------------- helpers
+
+    def _build_sources_footer(self, chunks: List[Dict]) -> str:
+        """Map each [n] citation back to the document/section/URL metadata
+        already tracked per chunk, so citations resolve to something the
+        user can actually go look up."""
+        lines = []
+        for i, c in enumerate(chunks, 1):
+            line = f"[{i}] {c['source']}"
+            if c.get("section"):
+                line += f" — {c['section']}"
+            line += f" ({c['url']})"
+            lines.append(line)
+        return "Sources:\n" + "\n".join(lines)
 
     def _generation_cache_key(self, question: str, context: str) -> str:
         """Cache-augmented generation: the final answer is keyed on the
